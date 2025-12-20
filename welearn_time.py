@@ -5,10 +5,8 @@ import re
 import time
 from textwrap import dedent
 from typing import Any, Dict, List, Union
-from bs4 import BeautifulSoup
 import base64
-
-import requests
+import tls_client
 
 REQUEST_INTERVAL = 2
 HEARTBEAT_INTERVAL = 1
@@ -23,7 +21,7 @@ targetTime: Union['int', List['int']]
 
 errors: List[str] = []
 maxLearningTime: int = 0
-session = requests.Session()
+session = tls_client.Session(client_identifier="chrome_120", debug=False)
 
 # ---------以下修改---------------------
 def to_hex_byte_array(byte_array):
@@ -52,9 +50,12 @@ def generate_cipher_text(password):
 def login(user, pwd):
     while True:
         try:
-            response = requests.get("https://welearn.sflep.com/user/prelogin.aspx?loginret=http://welearn.sflep.com/user/loginredirect.aspx")
-            code_challenge = response.url.split("%26")[4].split("%3D")[1]
-            state = response.url.split("%26")[6].split("%3D")[1]
+            response = session.get("https://welearn.sflep.com/user/prelogin.aspx?loginret=http://welearn.sflep.com/user/loginredirect.aspx")
+            rurl = response.headers.get('Location')
+
+            code_challenge = rurl.split("&")[4].split("=")[1]
+            state = rurl.split("&")[6].split("=")[1]
+
             rturl = f"/connect/authorize/callback?client_id=welearn_web&redirect_uri=https%3A%2F%2Fwelearn.sflep.com%2Fsignin-sflep&response_type=code&scope=openid%20profile%20email%20phone%20address&code_challenge={code_challenge}&code_challenge_method=S256&state={state}&x-client-SKU=ID_NET472&x-client-ver=6.32.1.0"
             # 获取回调url
             print("登录中...", end='')
@@ -69,25 +70,37 @@ def login(user, pwd):
                 }
 
                 response = session.post("https://sso.sflep.com/idsvr/account/login", data=form_data)
-                # print(response.json())
                 
-                code = response.json().get("code", -1)
+                rt_json = response.json()
+                code = rt_json.get("code", -1)
+
+                if code == -1:
+                    continue
 
                 if code == 1:
                     print("\n帐号或密码错误！")
                     exit(0)
 
-                session.get("https://welearn.sflep.com/user/prelogin.aspx?loginret=http://welearn.sflep.com/user/loginredirect.aspx")
-                # response = session.get("https://welearn.sflep.com/student/index.aspx")
+                next_url = f"https://sso.sflep.com/idsvr"+rt_json.get("data")
+
+                while True:
+                    resp = session.get(next_url)
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        next_url = resp.headers.get("Location", None)
+                        if not next_url:
+                            break
+                        print(f"Redirecting to: {next_url} (status: {resp.status_code})")
+                    else:
+                        break
 
                 if code == 0:
                     print("\n登录成功！")
                     return session
                 
                 print(".", end='')
-        except:
+        except Exception as e:
             print("错误返回,登录失败！")
-            print(f"返回信息：{response.json().get('msg', '未知错误')}")
+            print(f"错误信息：{e}, 返回信息：{response.text}")
             exit(0)
 # ---------以上修改---------------------
 

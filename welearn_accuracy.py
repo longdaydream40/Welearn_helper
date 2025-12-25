@@ -112,8 +112,6 @@ def welearn_accuracy_run():
             printline()
             print('我的课程: \n')
 
-        print(response.text)
-
         back = response.json()["clist"]
         for i, course in enumerate(back, start=1):
             print(f'[NO.{i:>2}] 完成度{course["per"]:>3}% {course["name"]}')

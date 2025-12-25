@@ -2,3 +2,4 @@ requests
 asyncio
 bs4
 typing
+tls_client

@@ -1,22 +1,19 @@
 import asyncio
 import json
 import random
-import re
 import time
 from textwrap import dedent
-from typing import Any, Dict, List, Union
+from typing import List, Union
 import base64
 import tls_client
+
+from keyboard_tree_selector import select_tree
+from welearn_tree import SelectedChapter, build_course_tree, resolve_selected_chapters
 
 REQUEST_INTERVAL = 2
 HEARTBEAT_INTERVAL = 1
 AJAX_URL = "https://welearn.sflep.com/Ajax/SCO.aspx"
 
-cid: str
-uid: str
-classid: str
-courseInfo: List[Any]
-unitIndex: int
 targetTime: Union['int', List['int']]
 
 errors: List[str] = []
@@ -105,69 +102,6 @@ def login(user, pwd):
 # ---------以上修改---------------------
 
 
-def get_target_course_info():
-    global cid, uid, classid, courseInfo
-
-    # get course list
-    response = session.get(
-        'https://welearn.sflep.com/ajax/authCourse.aspx?action=gmc',
-        headers={
-            'Referer': 'https://welearn.sflep.com/2019/student/index.aspx'
-        }
-    )
-    courseList = response.json()['clist']
-    for index, course in enumerate(courseList, start=1):
-        print('[id:{:>2d}]  完成度 {:>3d}%  {}'.format(index, course['per'], course['name']))
-
-    #  get cid(course id) and uid(user id) and class id
-    index = int(input('\n请输入需要刷时长的课程id（id为上方[]内的序号）: '))
-    cid = str(courseList[index - 1]['cid'])
-    response = session.get(
-        'https://welearn.sflep.com/2019/student/course_info.aspx?cid=' + cid,
-        headers={
-            'Referer': 'https://welearn.sflep.com/2019/student/index.aspx'
-        }
-    )
-
-    # ---------以下修改---------------------
-    url = f"https://welearn.sflep.com/student/course_info.aspx?cid={cid}"
-    response = session.get(url)
-    # script = BeautifulSoup(response.text, "html.parser").find_all("script")[13]
-    # print(script)
-    # uid = re.search(r"uid=(\d+)", script.text).group(1)
-    # classid = re.search(r"classid=(\d+)", script.text).group(1)
-
-    uid = re.search('"uid":(.*?),', response.text).group(1)
-    classid = re.search('"classid":"(.*?)"', response.text).group(1)
-    # ---------以上修改---------------------
-
-    # get target course's units
-    req = session.get(
-        'https://welearn.sflep.com/ajax/StudyStat.aspx',
-        params={
-            'action': 'courseunits',
-            'cid': cid,
-            'uid': uid
-        },
-        headers={
-            'Referer': 'https://welearn.sflep.com/2019/student/course_info.aspx'
-        }
-    )
-    courseInfo = req.json()['info']
-
-
-def choose_unit():
-    global unitIndex
-
-    print("\n\n")
-    print('[id: 0]  按顺序刷全部单元学习时长')
-    for index, unit in enumerate(courseInfo, start=1):
-        print(f"""[id:{index:>2d}]  {unit['unitname']}  {unit['name']}""")
-
-    print("\n\n")
-    unitIndex = int(input('请选择要刷时长的单元id（id为上方[]内的序号，输入0为刷全部单元）： '))
-
-
 def input_time():
     global targetTime
 
@@ -221,7 +155,9 @@ def output_results():
     input("Press any key to exit...")
 
 
-async def simulate(learningTime: int, chapter: Dict):
+async def simulate(learningTime: int, selected: SelectedChapter):
+    chapter = selected.chapter
+    context = selected.context
     print(f"""章节 : {chapter['location']}""")
     print(f"""已学 : {chapter['learntime']} 将学 : {learningTime}""")
 
@@ -231,8 +167,8 @@ async def simulate(learningTime: int, chapter: Dict):
 
     scoid = chapter['id']
     commonData = {
-        'uid': uid,
-        'cid': cid,
+        'uid': context.uid,
+        'cid': context.cid,
         'scoid': scoid
     }
 
@@ -340,50 +276,26 @@ async def heartbeat():
 async def watcher():
     global maxLearningTime
 
-    while True:
-        get_target_course_info()
-        choose_unit()
-        input_time()
+    print("查询课程中...")
+    course_tree = build_course_tree(session)
+    selected_nodes = select_tree("选择要刷时长的课程/单元/小节", course_tree)
+    selected_chapters = resolve_selected_chapters(session, selected_nodes)
+    if not selected_chapters:
+        print("未获取到可处理的小节。")
+        return
 
-        if(unitIndex == 0):
-            startIndex = 0
-            endIndex = len(courseInfo)
-        else:
-            startIndex = unitIndex-1
-            endIndex = unitIndex
+    input_time()
+    tasks = []
+    for selected in selected_chapters:
+        learningTime = generate_learning_time()
 
-        tasks = []
-        for unit in range(startIndex, endIndex):
-            response = session.get(
-                f"https://welearn.sflep.com/ajax/StudyStat.aspx?action=scoLeaves&cid={cid}&uid={uid}&unitidx={str(unit)}&classid={classid}",
-                headers={
-                    'Referer': 'https://welearn.sflep.com/2019/student/course_info.aspx?cid=' + cid
-                }
-            )
+        if learningTime > maxLearningTime:
+            maxLearningTime = learningTime
 
-            for chapter in response.json()['info']:
-                learningTime = generate_learning_time()
+        tasks.append(asyncio.create_task(simulate(learningTime, selected)))
 
-                if learningTime > maxLearningTime:
-                    maxLearningTime = learningTime
-
-                tasks.append(asyncio.create_task(simulate(learningTime, chapter)))
-
-        await heartbeat()
-        [await task for task in tasks]
-
-        if (unitIndex == 0):  # 如果已经刷完所有单元
-            break
-        else:  # 如果只刷了指定单元
-            print("\n\n")
-            print(f'本单元结束！错误 : {len(errors)}个')
-
-            for index, error in enumerate(errors, start=1):
-                print(f"第{index}个错误章节 : {error}")
-
-            print('回到选课处！！')
-            print("\n\n")
-            maxLearningTime = 0
+    await heartbeat()
+    [await task for task in tasks]
 
 
 async def main():

@@ -2,3 +2,5 @@ build
 .idea
 **.spec
 __pycache__
+*.exe
+dist/

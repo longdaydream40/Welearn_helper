@@ -132,11 +132,8 @@ def welearn_accuracy_run():
         if course['isvisible'] == 'false':
             print(f'[!!跳过!!]    {course["location"]}')
             continue
-        if "未" not in course["iscomplete"]:
-            print(f'[ 已完成 ]    {course["location"]}')
-            continue
 
-        print(f'[即将完成]    {course["location"]}')
+        print(f'[强制重刷]    {course["location"]}')
         crate = str(randint(mycrate[0], mycrate[1])) if randommode else mycrate
         data = '{"cmi":{"completion_status":"completed","interactions":[],"launch_data":"","progress_measure":"1","score":{"scaled":"' + crate + '","raw":"100"},"session_time":"0","success_status":"unknown","total_time":"0","mode":"normal"},"adl":{"data":[]},"cci":{"data":[],"service":{"dictionary":{"headword":"","short_cuts":""},"new_words":[],"notes":[],"writing_marking":[],"record":{"files":[]},"play":{"offline_media_id":"9999"}},"retry_count":"0","submit_time":""}}[INTERACTIONINFO]'
         id = course["id"]
